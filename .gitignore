@@ -1,0 +1,32 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# MLflow local files
+mlruns/
+mlflow.db
+
+# Raw large datasets
+data/raw/
+
+# Temporary/log files
+*.log
+*.tmp
+
+# Local output files
+git_log.txt
+git_status.txt
+git_cached.txt
+
+# Accidental duplicate text file
+.dockerignore.txt

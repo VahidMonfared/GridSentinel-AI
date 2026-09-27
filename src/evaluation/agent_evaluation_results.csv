@@ -1,0 +1,3 @@
+test_name,target_date,risk_label,risk_probability,evidence_date,human_review,latency_seconds,passed,timestamp
+Beryl high-risk case,2024-07-08,HIGH RISK,0.5931125162112695,2024-07-08,True,6.3836098999890964,True,2026-09-27T13:30:02.537370
+Normal low-outage day,2024-07-04,LOW RISK,0.00472903833327585,2024-07-04,False,0.4080944000015734,True,2026-09-27T13:30:02.945698

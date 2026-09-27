@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pandas
+numpy
+scikit-learn
+joblib
+faiss-cpu
+sentence-transformers
+langgraph
+requests

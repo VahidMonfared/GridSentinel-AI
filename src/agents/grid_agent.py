@@ -1,12 +1,12 @@
 from pathlib import Path
 from typing import TypedDict
 
+import os
 import requests
 import faiss
 import joblib
 import numpy as np
 import pandas as pd
-import os
 
 from langgraph.graph import StateGraph, END
 from sentence_transformers import SentenceTransformer
@@ -39,7 +39,7 @@ DOCS_FILE = RAG_DIR / "knowledge_documents.joblib"
 
 df = pd.read_csv(
     DATA_FILE,
-    parse_dates=["date"]
+    parse_dates=["date"],
 )
 
 risk_model = joblib.load(
@@ -96,7 +96,7 @@ FEATURES = [
 # Agent state
 # =========================================================
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
 
     query: str
     target_date: str
@@ -109,6 +109,10 @@ class AgentState(TypedDict):
 
     human_review_required: bool
 
+    llm_provider: str
+    llm_model: str
+    llm_fallback_used: bool
+
     final_answer: str
 
 
@@ -117,7 +121,7 @@ class AgentState(TypedDict):
 # =========================================================
 
 def risk_prediction_node(
-    state: AgentState
+    state: AgentState,
 ):
 
     target_date = pd.Timestamp(
@@ -159,16 +163,14 @@ def risk_prediction_node(
 # =========================================================
 
 def evidence_retrieval_node(
-    state: AgentState
+    state: AgentState,
 ):
 
     query = state["query"]
 
-    query_embedding = (
-        embedding_model.encode(
-            [query],
-            normalize_embeddings=True,
-        )
+    query_embedding = embedding_model.encode(
+        [query],
+        normalize_embeddings=True,
     )
 
     query_embedding = np.asarray(
@@ -187,7 +189,7 @@ def evidence_retrieval_node(
 
     for score, idx in zip(
         scores[0],
-        indices[0]
+        indices[0],
     ):
 
         doc = documents[idx]
@@ -261,7 +263,7 @@ def evidence_retrieval_node(
 # =========================================================
 
 def governance_node(
-    state: AgentState
+    state: AgentState,
 ):
 
     probability = (
@@ -279,11 +281,259 @@ def governance_node(
 
 
 # =========================================================
+# Deterministic fail-safe
+# =========================================================
+
+def deterministic_summary(
+    state: AgentState,
+) -> str:
+
+    probability_percent = (
+        state["risk_probability"] * 100
+    )
+
+    return (
+        f"The model classifies "
+        f"{state['target_date']} as "
+        f"{state['risk_label']} with a "
+        f"major-outage probability of "
+        f"{probability_percent:.1f}%."
+    )
+
+
+# =========================================================
+# Qwen through local Ollama
+# =========================================================
+
+def call_ollama(
+    prompt: str,
+) -> tuple[str, str]:
+
+    ollama_url = os.getenv(
+        "OLLAMA_URL",
+        "http://127.0.0.1:11434",
+    )
+
+    model = os.getenv(
+        "OLLAMA_MODEL",
+        "qwen2.5:3b",
+    )
+
+    response = requests.post(
+        ollama_url.rstrip("/")
+        + "/api/generate",
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": 0.1,
+            },
+        },
+        timeout=float(
+            os.getenv(
+                "OLLAMA_TIMEOUT_SECONDS",
+                "10",
+            )
+        ),
+    )
+
+    response.raise_for_status()
+
+    generated = (
+        response.json()
+        .get("response", "")
+        .strip()
+    )
+
+    if not generated:
+        raise RuntimeError(
+            "Ollama returned an empty response."
+        )
+
+    return generated, model
+
+
+# =========================================================
+# Qwen through OpenRouter
+# =========================================================
+
+def call_openrouter(
+    prompt: str,
+) -> tuple[str, str]:
+
+    api_key = os.getenv(
+        "OPENROUTER_API_KEY",
+        "",
+    ).strip()
+
+    if (
+        not api_key
+        or api_key == "YOUR_KEY_HERE"
+    ):
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is missing."
+        )
+
+    model = os.getenv(
+        "OPENROUTER_MODEL",
+        "qwen/qwen3.8-27b:free",
+    )
+
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization":
+                f"Bearer {api_key}",
+
+            "Content-Type":
+                "application/json",
+
+            "X-Title":
+                "GridSentinel AI",
+        },
+        json={
+            "model": model,
+
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are GridSentinel AI, "
+                        "a safety-conscious utility "
+                        "risk assessment assistant. "
+                        "Use only the supplied model "
+                        "output and retrieved evidence. "
+                        "Do not invent facts, modify "
+                        "numbers, or give autonomous "
+                        "safety-critical operational "
+                        "commands."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+
+            "temperature": 0.1,
+            "max_tokens": 220,
+        },
+        timeout=float(
+            os.getenv(
+                "OPENROUTER_TIMEOUT_SECONDS",
+                "30",
+            )
+        ),
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    generated = (
+        data["choices"][0]
+        ["message"]
+        ["content"]
+        .strip()
+    )
+
+    if not generated:
+        raise RuntimeError(
+            "OpenRouter returned an empty response."
+        )
+
+    return generated, model
+
+
+# =========================================================
+# LLM provider routing
+# =========================================================
+
+def generate_llm_summary(
+    state: AgentState,
+    prompt: str,
+):
+
+    provider = os.getenv(
+        "LLM_PROVIDER",
+        "auto",
+    ).strip().lower()
+
+    # Local development defaults to Ollama.
+    # Cloud Run defaults to OpenRouter.
+    if provider == "auto":
+
+        if os.getenv("K_SERVICE"):
+            provider = "openrouter"
+        else:
+            provider = "ollama"
+
+    try:
+
+        if provider == "openrouter":
+
+            text, model = call_openrouter(
+                prompt
+            )
+
+            return {
+                "text": text,
+                "provider": "OpenRouter",
+                "model": model,
+                "fallback": False,
+            }
+
+        if provider == "ollama":
+
+            text, model = call_ollama(
+                prompt
+            )
+
+            return {
+                "text": text,
+                "provider": "Ollama",
+                "model": model,
+                "fallback": False,
+            }
+
+        raise ValueError(
+            f"Unsupported LLM_PROVIDER: "
+            f"{provider}"
+        )
+
+    except (
+        requests.RequestException,
+        RuntimeError,
+        ValueError,
+        KeyError,
+        IndexError,
+        TypeError,
+    ):
+
+        return {
+            "text":
+                deterministic_summary(
+                    state
+                ),
+
+            "provider":
+                "Deterministic fallback",
+
+            "model":
+                "none",
+
+            "fallback":
+                True,
+        }
+
+
+# =========================================================
 # Final response node
 # =========================================================
 
 def answer_node(
-    state: AgentState
+    state: AgentState,
 ):
 
     probability_percent = (
@@ -300,15 +550,6 @@ def answer_node(
         )
 
     prompt = f"""
-You are GridSentinel AI.
-
-Use ONLY the information below.
-
-Do not invent facts.
-Do not change numbers.
-Do not rename evidence fields.
-Do not provide operational recommendations.
-
 User question:
 {state["query"]}
 
@@ -321,31 +562,40 @@ ML risk classification:
 Major-outage probability:
 {probability_percent:.1f}%
 
-Write ONLY a short 1-2 sentence risk assessment.
-Do not reproduce the evidence.
+Retrieved trusted evidence:
+{state["evidence"]}
+
+Write a concise 1-2 sentence risk assessment.
+
+Rules:
+- Use only the information above.
+- Do not invent facts.
+- Do not change numeric values.
+- Do not provide autonomous operational commands.
+- Do not claim causal relationships.
+- If risk is high, you may state that human engineering review is required.
 """
 
-    response = requests.post(
-        os.getenv(
-            "OLLAMA_URL",
-            "http://127.0.0.1:11434"
-        ) + "/api/generate",
-        json={
-            "model": "qwen2.5:3b",
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.1
-            },
-        },
-        timeout=120,
+    llm_result = generate_llm_summary(
+        state,
+        prompt,
     )
 
-    response.raise_for_status()
+    llm_summary = (
+        llm_result["text"]
+    )
 
-    llm_summary = response.json()[
-        "response"
-    ].strip()
+    provider = (
+        llm_result["provider"]
+    )
+
+    model = (
+        llm_result["model"]
+    )
+
+    fallback = (
+        llm_result["fallback"]
+    )
 
     final_answer = f"""
 1. Risk Assessment
@@ -356,11 +606,27 @@ Do not reproduce the evidence.
 
 3. Governance
 Governance status: {governance_text}
+
+4. LLM Runtime
+Provider: {provider}
+Model: {model}
+Fallback used: {fallback}
 """.strip()
 
     return {
-        "final_answer": final_answer
+        "llm_provider":
+            provider,
+
+        "llm_model":
+            model,
+
+        "llm_fallback_used":
+            fallback,
+
+        "final_answer":
+            final_answer,
     }
+
 
 # =========================================================
 # Build LangGraph
@@ -420,7 +686,7 @@ agent = graph.compile()
 
 
 # =========================================================
-# Test Beryl
+# Local test
 # =========================================================
 
 if __name__ == "__main__":

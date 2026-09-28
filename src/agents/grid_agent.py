@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import TypedDict
 
 import os
+import re
+
 import requests
 import faiss
 import joblib
@@ -11,7 +13,9 @@ import pandas as pd
 from langgraph.graph import StateGraph, END
 from sentence_transformers import SentenceTransformer
 
-from src.knowledge_graph.grid_knowledge_graph import get_graph_context
+from src.knowledge_graph.grid_knowledge_graph import (
+    get_graph_context,
+)
 
 
 # =========================================================
@@ -30,9 +34,15 @@ RAG_DIR = Path(
     "src/rag/artifacts"
 )
 
-FAISS_FILE = RAG_DIR / "grid_knowledge.faiss"
+FAISS_FILE = (
+    RAG_DIR
+    / "grid_knowledge.faiss"
+)
 
-DOCS_FILE = RAG_DIR / "knowledge_documents.joblib"
+DOCS_FILE = (
+    RAG_DIR
+    / "knowledge_documents.joblib"
+)
 
 
 # =========================================================
@@ -98,7 +108,10 @@ FEATURES = [
 # Agent state
 # =========================================================
 
-class AgentState(TypedDict, total=False):
+class AgentState(
+    TypedDict,
+    total=False,
+):
 
     query: str
     target_date: str
@@ -133,7 +146,8 @@ def risk_prediction_node(
     )
 
     row = df[
-        df["date"] == target_date
+        df["date"]
+        == target_date
     ]
 
     if row.empty:
@@ -143,9 +157,11 @@ def risk_prediction_node(
             f"{state['target_date']}"
         )
 
-    probability = risk_model.predict_proba(
-        row[FEATURES]
-    )[0, 1]
+    probability = (
+        risk_model.predict_proba(
+            row[FEATURES]
+        )[0, 1]
+    )
 
     label = (
         "HIGH RISK"
@@ -172,9 +188,11 @@ def evidence_retrieval_node(
 
     query = state["query"]
 
-    query_embedding = embedding_model.encode(
-        [query],
-        normalize_embeddings=True,
+    query_embedding = (
+        embedding_model.encode(
+            [query],
+            normalize_embeddings=True,
+        )
     )
 
     query_embedding = np.asarray(
@@ -182,14 +200,18 @@ def evidence_retrieval_node(
         dtype="float32",
     )
 
-    scores, indices = faiss_index.search(
-        query_embedding,
-        20,
+    scores, indices = (
+        faiss_index.search(
+            query_embedding,
+            20,
+        )
     )
 
     candidates = []
 
-    query_lower = query.lower()
+    query_lower = (
+        query.lower()
+    )
 
     for score, idx in zip(
         scores[0],
@@ -205,7 +227,8 @@ def evidence_retrieval_node(
         bonus = 0.0
 
         if (
-            "hurricane" in query_lower
+            "hurricane"
+            in query_lower
             and
             "hurricane indicator:\n1"
             in text_lower
@@ -213,14 +236,26 @@ def evidence_retrieval_node(
             bonus += 0.30
 
         if (
-            "beryl" in query_lower
+            "beryl"
+            in query_lower
             and
-            "beryl" in text_lower
+            "beryl"
+            in text_lower
         ):
             bonus += 0.40
 
         if (
-            "tornado" in query_lower
+            "derecho"
+            in query_lower
+            and
+            "derecho indicator:\n1"
+            in text_lower
+        ):
+            bonus += 0.40
+
+        if (
+            "tornado"
+            in query_lower
             and
             "tornado indicator:\n1"
             in text_lower
@@ -228,7 +263,8 @@ def evidence_retrieval_node(
             bonus += 0.30
 
         if (
-            "flood" in query_lower
+            "flood"
+            in query_lower
             and
             "flood indicator:\n1"
             in text_lower
@@ -238,7 +274,10 @@ def evidence_retrieval_node(
         candidates.append(
             {
                 "score":
-                    float(score + bonus),
+                    float(
+                        score
+                        + bonus
+                    ),
 
                 "doc":
                     doc,
@@ -247,7 +286,8 @@ def evidence_retrieval_node(
 
     candidates = sorted(
         candidates,
-        key=lambda x: x["score"],
+        key=lambda item:
+            item["score"],
         reverse=True,
     )
 
@@ -270,8 +310,10 @@ def knowledge_graph_node(
     state: AgentState,
 ):
 
-    context = get_graph_context(
-        state["query"]
+    context = (
+        get_graph_context(
+            state["query"]
+        )
     )
 
     return {
@@ -289,7 +331,9 @@ def governance_node(
 ):
 
     probability = (
-        state["risk_probability"]
+        state[
+            "risk_probability"
+        ]
     )
 
     require_review = (
@@ -303,23 +347,242 @@ def governance_node(
 
 
 # =========================================================
+# Evidence utilities
+# =========================================================
+
+def extract_evidence_value(
+    evidence: str,
+    label: str,
+):
+
+    lines = [
+        line.strip()
+        for line
+        in evidence.splitlines()
+        if line.strip()
+    ]
+
+    for index, line in enumerate(
+        lines
+    ):
+
+        if (
+            line.lower()
+            == f"{label.lower()}:"
+        ):
+
+            if (
+                index + 1
+                < len(lines)
+            ):
+                return lines[
+                    index + 1
+                ]
+
+    return None
+
+
+def format_integer(
+    value,
+):
+
+    try:
+
+        return (
+            f"{int(float(value)):,}"
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return str(value)
+
+
+def format_percent(
+    value,
+):
+
+    try:
+
+        return (
+            f"{float(value) * 100:.1f}%"
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return str(value)
+
+
+# =========================================================
+# Deterministic client-safe risk summary
+# =========================================================
+
+def build_safe_risk_summary(
+    state: AgentState,
+):
+
+    evidence = (
+        state["evidence"]
+    )
+
+    probability_percent = (
+        state[
+            "risk_probability"
+        ]
+        * 100
+    )
+
+    location = (
+        extract_evidence_value(
+            evidence,
+            "Location",
+        )
+        or "Harris County, Texas"
+    )
+
+    peak_customers = (
+        extract_evidence_value(
+            evidence,
+            "Peak customers without power",
+        )
+    )
+
+    peak_rate = (
+        extract_evidence_value(
+            evidence,
+            "Peak outage rate",
+        )
+    )
+
+    storm_type = (
+        extract_evidence_value(
+            evidence,
+            "Storm types",
+        )
+    )
+
+    if (
+        storm_type
+        and
+        storm_type.lower()
+        not in {
+            "none",
+            "nan",
+            "0",
+        }
+    ):
+
+        opening = (
+            f"{storm_type} was associated "
+            f"with significant grid disruption "
+            f"in {location}."
+        )
+
+    else:
+
+        opening = (
+            f"The assessment for "
+            f"{state['target_date']} "
+            f"in {location} indicates "
+            f"{state['risk_label'].lower()}."
+        )
+
+    evidence_parts = []
+
+    if peak_customers:
+
+        evidence_parts.append(
+            f"{format_integer(peak_customers)} "
+            f"customers were without power "
+            f"at the daily peak"
+        )
+
+    if peak_rate:
+
+        evidence_parts.append(
+            f"the peak outage rate reached "
+            f"{format_percent(peak_rate)}"
+        )
+
+    if evidence_parts:
+
+        evidence_sentence = (
+            "Observed evidence shows that "
+            + " and ".join(
+                evidence_parts
+            )
+            + "."
+        )
+
+    else:
+
+        evidence_sentence = ""
+
+    model_sentence = (
+        f"The model estimates a "
+        f"{probability_percent:.1f}% "
+        f"probability of a major outage."
+    )
+
+    if state[
+        "human_review_required"
+    ]:
+
+        governance_sentence = (
+            "Qualified human engineering "
+            "review is required before any "
+            "safety-critical action."
+        )
+
+    else:
+
+        governance_sentence = (
+            "The case remains within "
+            "routine monitoring thresholds."
+        )
+
+    summary = " ".join(
+        part
+        for part in [
+            opening,
+            evidence_sentence,
+            model_sentence,
+            governance_sentence,
+        ]
+        if part
+    )
+
+    return summary
+
+
+# =========================================================
 # Deterministic fail-safe
 # =========================================================
 
-def deterministic_summary(
+def deterministic_context_note(
     state: AgentState,
 ) -> str:
 
-    probability_percent = (
-        state["risk_probability"] * 100
-    )
+    if state[
+        "human_review_required"
+    ]:
+
+        return (
+            "The retrieved evidence and "
+            "structured model output should "
+            "be reviewed by a qualified "
+            "engineer before operational use."
+        )
 
     return (
-        f"The model classifies "
-        f"{state['target_date']} as "
-        f"{state['risk_label']} with a "
-        f"major-outage probability of "
-        f"{probability_percent:.1f}%."
+        "The retrieved evidence is consistent "
+        "with routine monitoring rather than "
+        "automatic escalation."
     )
 
 
@@ -346,12 +609,18 @@ def call_ollama(
         + "/api/generate",
 
         json={
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
+            "model":
+                model,
+
+            "prompt":
+                prompt,
+
+            "stream":
+                False,
 
             "options": {
-                "temperature": 0.1,
+                "temperature":
+                    0.1,
             },
         },
 
@@ -367,16 +636,24 @@ def call_ollama(
 
     generated = (
         response.json()
-        .get("response", "")
+        .get(
+            "response",
+            "",
+        )
         .strip()
     )
 
     if not generated:
+
         raise RuntimeError(
-            "Ollama returned an empty response."
+            "Ollama returned "
+            "an empty response."
         )
 
-    return generated, model
+    return (
+        generated,
+        model,
+    )
 
 
 # =========================================================
@@ -394,10 +671,14 @@ def call_openrouter(
 
     if (
         not api_key
-        or api_key == "YOUR_KEY_HERE"
+        or
+        api_key
+        == "YOUR_KEY_HERE"
     ):
+
         raise RuntimeError(
-            "OPENROUTER_API_KEY is missing."
+            "OPENROUTER_API_KEY "
+            "is missing."
         )
 
     model = os.getenv(
@@ -420,34 +701,45 @@ def call_openrouter(
         },
 
         json={
-            "model": model,
+            "model":
+                model,
 
             "messages": [
                 {
-                    "role": "system",
+                    "role":
+                        "system",
 
                     "content": (
-                        "You are GridSentinel AI, "
-                        "a safety-conscious utility "
-                        "risk assessment assistant. "
-                        "Use only supplied model output, "
-                        "retrieved evidence, and "
-                        "structured knowledge graph context. "
+                        "You are GridSentinel AI. "
+                        "Return only one short "
+                        "plain-English qualitative "
+                        "sentence. "
+                        "Do not include numbers. "
+                        "Do not show reasoning steps. "
+                        "Do not use phrases such as "
+                        "'thinking process', "
+                        "'step 1', 'analysis', "
+                        "or 'chain of thought'. "
                         "Do not invent facts. "
-                        "Do not modify numbers. "
-                        "Do not provide autonomous "
-                        "safety-critical commands."
+                        "Do not issue operational "
+                        "commands."
                     ),
                 },
 
                 {
-                    "role": "user",
-                    "content": prompt,
+                    "role":
+                        "user",
+
+                    "content":
+                        prompt,
                 },
             ],
 
-            "temperature": 0.1,
-            "max_tokens": 220,
+            "temperature":
+                0.1,
+
+            "max_tokens":
+                80,
         },
 
         timeout=float(
@@ -470,18 +762,70 @@ def call_openrouter(
     )
 
     if not generated:
+
         raise RuntimeError(
-            "OpenRouter returned an empty response."
+            "OpenRouter returned "
+            "an empty response."
         )
 
-    return generated, model
+    return (
+        generated,
+        model,
+    )
+
+
+# =========================================================
+# Client-output LLM guardrail
+# =========================================================
+
+def validate_llm_note(
+    text: str,
+):
+
+    lowered = (
+        text.lower()
+    )
+
+    forbidden_phrases = [
+        "thinking process",
+        "chain of thought",
+        "step 1",
+        "step 2",
+        "analyze user",
+        "analysis:",
+        "reasoning:",
+        "identify key",
+    ]
+
+    if any(
+        phrase in lowered
+        for phrase
+        in forbidden_phrases
+    ):
+
+        return False
+
+    if re.search(
+        r"\d",
+        text,
+    ):
+
+        return False
+
+    if len(
+        text.split()
+    ) > 45:
+
+        return False
+
+    return True
 
 
 # =========================================================
 # LLM provider routing
 # =========================================================
 
-def generate_llm_summary(
+def generate_llm_context_note(
     state: AgentState,
     prompt: str,
 ):
@@ -493,57 +837,93 @@ def generate_llm_summary(
 
     if provider == "auto":
 
-        if os.getenv("K_SERVICE"):
-            provider = "openrouter"
+        if os.getenv(
+            "K_SERVICE"
+        ):
+
+            provider = (
+                "openrouter"
+            )
+
         else:
-            provider = "ollama"
+
+            provider = (
+                "ollama"
+            )
 
     try:
 
-        if provider == "openrouter":
+        if (
+            provider
+            == "openrouter"
+        ):
 
-            text, model = call_openrouter(
-                prompt
+            text, model = (
+                call_openrouter(
+                    prompt
+                )
             )
+
+            provider_name = (
+                "OpenRouter"
+            )
+
+        elif (
+            provider
+            == "ollama"
+        ):
+
+            text, model = (
+                call_ollama(
+                    prompt
+                )
+            )
+
+            provider_name = (
+                "Ollama"
+            )
+
+        else:
+
+            raise ValueError(
+                f"Unsupported "
+                f"LLM_PROVIDER: "
+                f"{provider}"
+            )
+
+        if not validate_llm_note(
+            text
+        ):
 
             return {
                 "text":
-                    text,
+                    deterministic_context_note(
+                        state
+                    ),
 
                 "provider":
-                    "OpenRouter",
+                    provider_name,
 
                 "model":
                     model,
 
                 "fallback":
-                    False,
+                    True,
             }
 
-        if provider == "ollama":
+        return {
+            "text":
+                text,
 
-            text, model = call_ollama(
-                prompt
-            )
+            "provider":
+                provider_name,
 
-            return {
-                "text":
-                    text,
+            "model":
+                model,
 
-                "provider":
-                    "Ollama",
-
-                "model":
-                    model,
-
-                "fallback":
-                    False,
-            }
-
-        raise ValueError(
-            f"Unsupported LLM_PROVIDER: "
-            f"{provider}"
-        )
+            "fallback":
+                False,
+        }
 
     except (
         requests.RequestException,
@@ -556,7 +936,7 @@ def generate_llm_summary(
 
         return {
             "text":
-                deterministic_summary(
+                deterministic_context_note(
                     state
                 ),
 
@@ -579,60 +959,38 @@ def answer_node(
     state: AgentState,
 ):
 
-    probability_percent = (
-        state["risk_probability"] * 100
+    safe_summary = (
+        build_safe_risk_summary(
+            state
+        )
     )
-
-    if state["human_review_required"]:
-
-        governance_text = (
-            "Human engineering review required."
-        )
-
-    else:
-
-        governance_text = (
-            "Routine monitoring."
-        )
 
     prompt = f"""
 User question:
 {state["query"]}
 
-Target date:
-{state["target_date"]}
-
-ML risk classification:
+Risk label:
 {state["risk_label"]}
 
-Major-outage probability:
-{probability_percent:.1f}%
-
-Retrieved trusted evidence:
-{state["evidence"]}
-
-Structured knowledge graph context:
+Knowledge graph context:
 {state["graph_context"]}
 
-Write a concise 1-2 sentence risk assessment.
+Write one short qualitative sentence
+that adds context for the client.
 
-Rules:
-- Use only the information above.
-- Do not invent facts.
-- Do not change numeric values.
-- Do not provide autonomous operational commands.
-- Do not claim causal relationships.
-- If risk is high, you may state that human engineering review is required.
+Do not include any numbers.
+Do not repeat the risk probability.
+Do not show your reasoning process.
+Do not issue operational commands.
 """
 
-    llm_result = generate_llm_summary(
-        state,
-        prompt,
+    llm_result = (
+        generate_llm_context_note(
+            state,
+            prompt,
+        )
     )
 
-    llm_summary = (
-        llm_result["text"]
-    )
 
     provider = (
         llm_result["provider"]
@@ -646,9 +1004,24 @@ Rules:
         llm_result["fallback"]
     )
 
+    if state[
+        "human_review_required"
+    ]:
+
+        governance_text = (
+            "Human engineering "
+            "review required."
+        )
+
+    else:
+
+        governance_text = (
+            "Routine monitoring."
+        )
+
     final_answer = f"""
 1. Risk Assessment
-{llm_summary}
+{safe_summary}
 
 2. Evidence
 {state["evidence"]}

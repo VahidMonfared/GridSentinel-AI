@@ -1,0 +1,72 @@
+{
+  "target_date": "2024-07-08",
+  "model_probability": 0.5931125162112695,
+  "reconstructed_probability": 0.5931125162112694,
+  "reconstruction_error": 1.1102230246251565e-16,
+  "intercept": -2.264601303668015,
+  "final_log_odds": 0.37684742704406915,
+  "top_positive_drivers": [
+    {
+      "feature": "storm_event",
+      "raw_value": 1.0,
+      "coefficient": 0.9818705449920468,
+      "log_odds_contribution": 3.2067757715985965
+    },
+    {
+      "feature": "storm_recent_7d",
+      "raw_value": 1.0,
+      "coefficient": 1.1521138451873,
+      "log_odds_contribution": 1.2847953657794422
+    },
+    {
+      "feature": "is_flood_recent_7d",
+      "raw_value": 0.0,
+      "coefficient": -0.41482369606074854,
+      "log_odds_contribution": 0.1653791303794395
+    },
+    {
+      "feature": "outage_max_7d",
+      "raw_value": 101.0,
+      "coefficient": -0.3199401516516325,
+      "log_odds_contribution": 0.1520933411309544
+    },
+    {
+      "feature": "is_tornado_recent_7d",
+      "raw_value": 0.0,
+      "coefficient": -0.41025056495098633,
+      "log_odds_contribution": 0.12097629162005023
+    }
+  ],
+  "top_negative_drivers": [
+    {
+      "feature": "day_of_year",
+      "raw_value": 190.0,
+      "coefficient": -0.2983926193530814,
+      "log_odds_contribution": -0.5611401540689118
+    },
+    {
+      "feature": "outage_mean_7d",
+      "raw_value": 27.857142857142858,
+      "coefficient": 1.1763774961144235,
+      "log_odds_contribution": -0.4843476350915341
+    },
+    {
+      "feature": "month",
+      "raw_value": 7.0,
+      "coefficient": -0.21418142903354195,
+      "log_odds_contribution": -0.43698005866063167
+    },
+    {
+      "feature": "storm_count_7d",
+      "raw_value": 1.0,
+      "coefficient": 0.9034883678470644,
+      "log_odds_contribution": -0.31617906534470885
+    },
+    {
+      "feature": "day_of_week",
+      "raw_value": 0.0,
+      "coefficient": 0.13879046702536865,
+      "log_odds_contribution": -0.20818570053805296
+    }
+  ]
+}

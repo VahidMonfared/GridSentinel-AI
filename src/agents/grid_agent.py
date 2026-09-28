@@ -11,6 +11,8 @@ import pandas as pd
 from langgraph.graph import StateGraph, END
 from sentence_transformers import SentenceTransformer
 
+from src.knowledge_graph.grid_knowledge_graph import get_graph_context
+
 
 # =========================================================
 # Files
@@ -106,6 +108,8 @@ class AgentState(TypedDict, total=False):
 
     evidence: str
     evidence_date: str
+
+    graph_context: str
 
     human_review_required: bool
 
@@ -259,6 +263,24 @@ def evidence_retrieval_node(
 
 
 # =========================================================
+# Tool 3: Knowledge Graph
+# =========================================================
+
+def knowledge_graph_node(
+    state: AgentState,
+):
+
+    context = get_graph_context(
+        state["query"]
+    )
+
+    return {
+        "graph_context":
+            context
+    }
+
+
+# =========================================================
 # Governance / HITL node
 # =========================================================
 
@@ -322,14 +344,17 @@ def call_ollama(
     response = requests.post(
         ollama_url.rstrip("/")
         + "/api/generate",
+
         json={
             "model": model,
             "prompt": prompt,
             "stream": False,
+
             "options": {
                 "temperature": 0.1,
             },
         },
+
         timeout=float(
             os.getenv(
                 "OLLAMA_TIMEOUT_SECONDS",
@@ -355,7 +380,7 @@ def call_ollama(
 
 
 # =========================================================
-# Qwen through OpenRouter
+# OpenRouter LLM
 # =========================================================
 
 def call_openrouter(
@@ -377,11 +402,12 @@ def call_openrouter(
 
     model = os.getenv(
         "OPENROUTER_MODEL",
-        "qwen/qwen3.8-27b:free",
+        "openrouter/free",
     )
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
+
         headers={
             "Authorization":
                 f"Bearer {api_key}",
@@ -392,24 +418,28 @@ def call_openrouter(
             "X-Title":
                 "GridSentinel AI",
         },
+
         json={
             "model": model,
 
             "messages": [
                 {
                     "role": "system",
+
                     "content": (
                         "You are GridSentinel AI, "
                         "a safety-conscious utility "
                         "risk assessment assistant. "
-                        "Use only the supplied model "
-                        "output and retrieved evidence. "
-                        "Do not invent facts, modify "
-                        "numbers, or give autonomous "
-                        "safety-critical operational "
-                        "commands."
+                        "Use only supplied model output, "
+                        "retrieved evidence, and "
+                        "structured knowledge graph context. "
+                        "Do not invent facts. "
+                        "Do not modify numbers. "
+                        "Do not provide autonomous "
+                        "safety-critical commands."
                     ),
                 },
+
                 {
                     "role": "user",
                     "content": prompt,
@@ -419,6 +449,7 @@ def call_openrouter(
             "temperature": 0.1,
             "max_tokens": 220,
         },
+
         timeout=float(
             os.getenv(
                 "OPENROUTER_TIMEOUT_SECONDS",
@@ -460,8 +491,6 @@ def generate_llm_summary(
         "auto",
     ).strip().lower()
 
-    # Local development defaults to Ollama.
-    # Cloud Run defaults to OpenRouter.
     if provider == "auto":
 
         if os.getenv("K_SERVICE"):
@@ -478,10 +507,17 @@ def generate_llm_summary(
             )
 
             return {
-                "text": text,
-                "provider": "OpenRouter",
-                "model": model,
-                "fallback": False,
+                "text":
+                    text,
+
+                "provider":
+                    "OpenRouter",
+
+                "model":
+                    model,
+
+                "fallback":
+                    False,
             }
 
         if provider == "ollama":
@@ -491,10 +527,17 @@ def generate_llm_summary(
             )
 
             return {
-                "text": text,
-                "provider": "Ollama",
-                "model": model,
-                "fallback": False,
+                "text":
+                    text,
+
+                "provider":
+                    "Ollama",
+
+                "model":
+                    model,
+
+                "fallback":
+                    False,
             }
 
         raise ValueError(
@@ -541,10 +584,13 @@ def answer_node(
     )
 
     if state["human_review_required"]:
+
         governance_text = (
             "Human engineering review required."
         )
+
     else:
+
         governance_text = (
             "Routine monitoring."
         )
@@ -564,6 +610,9 @@ Major-outage probability:
 
 Retrieved trusted evidence:
 {state["evidence"]}
+
+Structured knowledge graph context:
+{state["graph_context"]}
 
 Write a concise 1-2 sentence risk assessment.
 
@@ -604,10 +653,13 @@ Rules:
 2. Evidence
 {state["evidence"]}
 
-3. Governance
+3. Knowledge Graph Context
+{state["graph_context"]}
+
+4. Governance
 Governance status: {governance_text}
 
-4. LLM Runtime
+5. LLM Runtime
 Provider: {provider}
 Model: {model}
 Fallback used: {fallback}
@@ -636,20 +688,30 @@ graph = StateGraph(
     AgentState
 )
 
+
 graph.add_node(
     "risk_prediction",
     risk_prediction_node,
 )
+
 
 graph.add_node(
     "retrieve_evidence",
     evidence_retrieval_node,
 )
 
+
+graph.add_node(
+    "knowledge_graph",
+    knowledge_graph_node,
+)
+
+
 graph.add_node(
     "governance",
     governance_node,
 )
+
 
 graph.add_node(
     "answer",
@@ -661,20 +723,30 @@ graph.set_entry_point(
     "risk_prediction"
 )
 
+
 graph.add_edge(
     "risk_prediction",
     "retrieve_evidence",
 )
 
+
 graph.add_edge(
     "retrieve_evidence",
+    "knowledge_graph",
+)
+
+
+graph.add_edge(
+    "knowledge_graph",
     "governance",
 )
+
 
 graph.add_edge(
     "governance",
     "answer",
 )
+
 
 graph.add_edge(
     "answer",

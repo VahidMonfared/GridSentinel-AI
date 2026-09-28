@@ -1,0 +1,51 @@
+name: Deploy GridSentinel to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker authentication
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t us-central1-docker.pkg.dev/gridsentinel-ai-510000/gridsentinel-repo/gridsentinel-ai:${{ github.sha }} \
+            -f deployment/docker/Dockerfile .
+
+      - name: Push Docker image
+        run: |
+          docker push \
+            us-central1-docker.pkg.dev/gridsentinel-ai-510000/gridsentinel-repo/gridsentinel-ai:${{ github.sha }}
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy gridsentinel-ai \
+            --image us-central1-docker.pkg.dev/gridsentinel-ai-510000/gridsentinel-repo/gridsentinel-ai:${{ github.sha }} \
+            --region us-central1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --quiet

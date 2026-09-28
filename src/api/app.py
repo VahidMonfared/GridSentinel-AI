@@ -13,7 +13,7 @@ from src.models.reasoning_explainer import (
 
 app = FastAPI(
     title="GridSentinel AI",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "Governed agentic AI for extreme-weather "
         "grid outage risk assessment."
@@ -32,23 +32,16 @@ def extract_risk_summary(
 
     text = final_answer
 
-    start_marker = (
-        "1. Risk Assessment"
-    )
-
-    end_marker = (
-        "2. Evidence"
-    )
+    start_marker = "1. Risk Assessment"
+    end_marker = "2. Evidence"
 
     if start_marker in text:
-
         text = text.split(
             start_marker,
             1,
         )[1]
 
     if end_marker in text:
-
         text = text.split(
             end_marker,
             1,
@@ -107,9 +100,7 @@ def assess(
     request: AssessmentRequest,
 ):
 
-    start_time = (
-        time.perf_counter()
-    )
+    start_time = time.perf_counter()
 
     try:
 
@@ -133,8 +124,7 @@ def assess(
         )
 
         log_agent_run(
-            query=
-                request.query,
+            query=request.query,
 
             target_date=
                 request.target_date,
@@ -287,6 +277,7 @@ def home():
 
 body {
     margin: 0;
+
     font-family:
         Inter,
         -apple-system,
@@ -339,7 +330,7 @@ body {
 
     box-shadow:
         0 8px 28px
-        rgba(20, 30, 50, 0.05);
+        rgba(20,30,50,0.05);
 }
 
 .field {
@@ -421,7 +412,7 @@ button:disabled {
     border: 1px solid #e2e6ec;
     border-radius: 13px;
     padding: 18px;
-    background: #ffffff;
+    background: white;
 }
 
 .section-title {
@@ -460,45 +451,76 @@ button:disabled {
     font-weight: 700;
 }
 
+.explainer-box {
+    margin-top: 12px;
+    padding: 13px 14px;
+    background: #f7f9fc;
+    border-radius: 10px;
+    color: #596577;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.explainer-box strong {
+    color: #273349;
+}
+
 .reasoning-intro {
     font-size: 13px;
-    color: #667286;
-    line-height: 1.55;
-    margin-bottom: 13px;
+    color: #596577;
+    line-height: 1.6;
+    margin-bottom: 15px;
+}
+
+.rank-note {
+    background: #f7f9fc;
+    padding: 12px 14px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: #596577;
+    line-height: 1.6;
 }
 
 .driver {
     display: grid;
+
     grid-template-columns:
-        165px 80px 1fr;
-    gap: 11px;
+        48px
+        185px
+        95px
+        1fr;
 
-    align-items: center;
+    gap: 10px;
 
-    padding: 10px 0;
+    align-items: start;
+
+    padding: 13px 0;
 
     border-top:
         1px solid #edf0f3;
 }
 
-.driver:first-of-type {
-    border-top: 0;
+.driver-rank {
+    font-weight: 800;
+    color: #4f5f78;
+    font-size: 13px;
 }
 
 .driver-name {
-    font-weight: 720;
+    font-weight: 740;
     font-size: 13px;
 }
 
 .driver-impact {
     font-size: 13px;
-    font-weight: 760;
+    font-weight: 780;
 }
 
 .driver-description {
     font-size: 13px;
     color: #606c7e;
-    line-height: 1.45;
+    line-height: 1.5;
 }
 
 .positive {
@@ -510,11 +532,12 @@ button:disabled {
 }
 
 .validation {
-    margin-top: 13px;
-    padding: 11px 13px;
+    margin-top: 14px;
+    padding: 12px 14px;
     border-radius: 9px;
     background: #f3f7f5;
-    font-size: 13px;
+    font-size: 12px;
+    line-height: 1.55;
     color: #40574f;
 }
 
@@ -709,6 +732,11 @@ button:disabled {
                     class="evidence-grid"
                 ></div>
 
+                <div
+                    id="evidence-help"
+                    class="explainer-box"
+                ></div>
+
             </div>
 
 
@@ -718,18 +746,30 @@ button:disabled {
                     Why the Model Reached This Risk
                 </div>
 
-                <div class="reasoning-intro">
-                    These are direct contributions
-                    from the deployed Logistic
-                    Regression model. Positive values
-                    push risk upward; negative values
-                    push it downward. They describe
-                    model influence, not causation.
+                <div
+                    id="reasoning-intro"
+                    class="reasoning-intro"
+                ></div>
+
+                <div class="rank-note">
+                    <strong>How to read this table:</strong>
+                    Rank #1 is the strongest influence
+                    among the understandable factors
+                    shown below for the selected date.
+                    A positive score increased the
+                    model's estimated outage risk.
+                    A negative score reduced it.
+                    The score is a Logistic Regression
+                    model contribution in log-odds
+                    units — it is <strong>not a
+                    percentage</strong>. Factors used
+                    internally by the model but not
+                    useful for a clear client
+                    explanation are intentionally not
+                    displayed here.
                 </div>
 
-                <div
-                    id="drivers"
-                ></div>
+                <div id="drivers"></div>
 
                 <div
                     id="validation"
@@ -777,6 +817,27 @@ button:disabled {
 
 <script>
 
+function prettyDate(
+    dateString
+) {
+
+    const date =
+        new Date(
+            dateString
+            + "T00:00:00"
+        );
+
+    return date.toLocaleDateString(
+        "en-US",
+        {
+            year: "numeric",
+            month: "long",
+            day: "numeric"
+        }
+    );
+}
+
+
 function addEvidence(
     container,
     label,
@@ -787,6 +848,7 @@ function addEvidence(
         value === undefined
         || value === null
         || value === ""
+        || value === "NaN"
     ) {
         return;
     }
@@ -813,9 +875,213 @@ function addEvidence(
 }
 
 
+function driverExplanation(
+    driver,
+    selectedDate,
+    rank
+) {
+
+    const dateText =
+        prettyDate(
+            selectedDate
+        );
+
+    const contribution =
+        Math.abs(
+            driver.contribution
+        ).toFixed(2);
+
+    const direction =
+        driver.contribution > 0
+        ? "increased"
+        : "reduced";
+
+    if (
+        driver.feature
+        === "storm_event"
+    ) {
+
+        return (
+            "A severe-weather event was recorded "
+            + "on the selected date ("
+            + dateText
+            + "). In this prediction, that signal "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units. It ranks #"
+            + rank
+            + " among the interpretable factors "
+            + "shown here."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "storm_recent_7d"
+    ) {
+
+        return (
+            "The model also found severe weather "
+            + "during the 7 days before "
+            + dateText
+            + ". That recent storm activity "
+            + direction
+            + " the risk score by "
+            + contribution
+            + " units. This means the model used "
+            + "recent conditions as additional "
+            + "context for the selected day."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "outage_max_7d"
+    ) {
+
+        return (
+            "This feature looks at the largest "
+            + "customer outage observed during "
+            + "the 7 days before "
+            + dateText
+            + ". In this prediction it "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "outage_mean_7d"
+    ) {
+
+        return (
+            "This feature summarizes the average "
+            + "customer outage level during the "
+            + "7 days before "
+            + dateText
+            + ". For this specific prediction, "
+            + "its value "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units. A negative contribution "
+            + "does not mean outages are good; it "
+            + "only describes how this trained "
+            + "model used that value in this case."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "outage_lag_1d"
+    ) {
+
+        return (
+            "This feature is the customer outage "
+            + "level one day before "
+            + dateText
+            + ". In this prediction it "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units. It provides the model with "
+            + "very recent grid-condition context."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "is_hurricane"
+    ) {
+
+        return (
+            "The selected date was identified as "
+            + "a hurricane event. In this "
+            + "prediction, that indicator "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "is_derecho"
+    ) {
+
+        return (
+            "The selected date was identified as "
+            + "a derecho event. In this "
+            + "prediction, that indicator "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "is_tornado"
+    ) {
+
+        return (
+            "A tornado indicator was active for "
+            + "the selected date. In this "
+            + "prediction it "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units."
+        );
+    }
+
+
+    if (
+        driver.feature
+        === "is_flood"
+    ) {
+
+        return (
+            "A flood indicator was active for "
+            + "the selected date. In this "
+            + "prediction it "
+            + direction
+            + " the model's risk score by "
+            + contribution
+            + " units."
+        );
+    }
+
+
+    return (
+        driver.description
+        + " In this prediction it "
+        + direction
+        + " the model's risk score by "
+        + contribution
+        + " units."
+    );
+}
+
+
 function renderDriver(
     container,
-    driver
+    driver,
+    rank,
+    selectedDate
 ) {
 
     const row =
@@ -834,10 +1100,20 @@ function renderDriver(
         ? "+"
         : "";
 
+    const directionLabel =
+        positive
+        ? "Higher risk"
+        : "Lower risk";
+
     row.innerHTML =
-        "<div class='driver-name'>"
+        "<div class='driver-rank'>#"
+        + rank
+        + "</div>"
+
+        + "<div class='driver-name'>"
         + driver.label
         + "</div>"
+
         + "<div class='driver-impact "
         + (
             positive
@@ -847,9 +1123,16 @@ function renderDriver(
         + "'>"
         + sign
         + driver.contribution.toFixed(2)
+        + "<br>"
+        + directionLabel
         + "</div>"
+
         + "<div class='driver-description'>"
-        + driver.description
+        + driverExplanation(
+            driver,
+            selectedDate,
+            rank
+        )
         + "</div>";
 
     container.appendChild(
@@ -874,6 +1157,11 @@ async function assessRisk() {
         document.getElementById(
             "error"
         );
+
+    const selectedDate =
+        document.getElementById(
+            "date"
+        ).value;
 
     button.disabled = true;
 
@@ -912,11 +1200,7 @@ async function assessRisk() {
                                     .value,
 
                                 target_date:
-                                    document
-                                    .getElementById(
-                                        "date"
-                                    )
-                                    .value
+                                    selectedDate
                             }
                         )
                 }
@@ -988,7 +1272,11 @@ async function assessRisk() {
             data.evidence[
                 "Date"
             ]
+            || prettyDate(
+                selectedDate
+            )
         );
+
 
         addEvidence(
             evidence,
@@ -997,6 +1285,7 @@ async function assessRisk() {
                 "Location"
             ]
         );
+
 
         addEvidence(
             evidence,
@@ -1007,6 +1296,7 @@ async function assessRisk() {
                 ]
             ).toLocaleString()
         );
+
 
         addEvidence(
             evidence,
@@ -1019,6 +1309,7 @@ async function assessRisk() {
                 )
             ).toLocaleString()
         );
+
 
         addEvidence(
             evidence,
@@ -1034,6 +1325,7 @@ async function assessRisk() {
             + "%"
         );
 
+
         addEvidence(
             evidence,
             "Storm type",
@@ -1041,6 +1333,42 @@ async function assessRisk() {
                 "Storm types"
             ]
         );
+
+
+        document.getElementById(
+            "evidence-help"
+        ).innerHTML =
+            "<strong>What these numbers mean:</strong><br>"
+            + "<strong>Peak customers out</strong> is "
+            + "the highest observed number of tracked "
+            + "customers without power at any observation "
+            + "on the selected date. "
+            + "<strong>Mean customers out</strong> is "
+            + "the average observed number without power "
+            + "across that day's outage observations. "
+            + "<strong>Peak outage rate</strong> is the "
+            + "highest observed share of tracked customers "
+            + "without power on that date. "
+            + "<strong>Storm type</strong> identifies the "
+            + "weather event associated with the selected "
+            + "date in the evidence data.";
+
+
+        document.getElementById(
+            "reasoning-intro"
+        ).innerHTML =
+            "The factors below explain how the deployed "
+            + "Logistic Regression model reached its "
+            + "prediction for <strong>"
+            + prettyDate(
+                selectedDate
+            )
+            + "</strong>. They are ordered by the "
+            + "absolute size of their influence among "
+            + "the interpretable factors shown here. "
+            + "A factor near the top had a larger effect "
+            + "on this specific prediction than a factor "
+            + "lower in the table.";
 
 
         const drivers =
@@ -1051,25 +1379,43 @@ async function assessRisk() {
         drivers.innerHTML = "";
 
 
-        data.reasoning
-        .positive_drivers
-        .forEach(
-            driver =>
-                renderDriver(
-                    drivers,
-                    driver
+        const allDrivers = [
+            ...data.reasoning
+                .positive_drivers,
+
+            ...data.reasoning
+                .negative_drivers
+        ];
+
+
+        allDrivers.sort(
+            (
+                a,
+                b
+            ) =>
+                Math.abs(
+                    b.contribution
+                )
+                -
+                Math.abs(
+                    a.contribution
                 )
         );
 
 
-        data.reasoning
-        .negative_drivers
-        .forEach(
-            driver =>
+        allDrivers.forEach(
+            (
+                driver,
+                index
+            ) => {
+
                 renderDriver(
                     drivers,
-                    driver
-                )
+                    driver,
+                    index + 1,
+                    selectedDate
+                );
+            }
         );
 
 
@@ -1091,15 +1437,21 @@ async function assessRisk() {
 
         document.getElementById(
             "validation"
-        ).textContent =
-            "Exact validation: model "
+        ).innerHTML =
+            "<strong>Exact model check:</strong> "
+            + "The production model predicted "
             + modelProbability
-            + "% · reconstructed "
+            + "% and the explanation reconstructed "
             + reconstructed
-            + "% · numerical error "
+            + "%. The numerical difference was "
             + data.reasoning
                 .reconstruction_error
-                .toExponential(1);
+                .toExponential(1)
+            + ". This means the explanation is "
+            + "mathematically tied to the deployed "
+            + "Logistic Regression calculation rather "
+            + "than being an explanation invented by "
+            + "the language model.";
 
 
         document.getElementById(
@@ -1153,4 +1505,3 @@ async function assessRisk() {
 </body>
 </html>
 """
-

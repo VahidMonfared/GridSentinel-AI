@@ -1,4 +1,8 @@
 import time
+from pathlib import Path
+
+import joblib
+import pandas as pd
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -11,9 +15,13 @@ from src.models.reasoning_explainer import (
 )
 
 
+# ==================================================
+# App
+# ==================================================
+
 app = FastAPI(
     title="GridSentinel AI",
-    version="1.2.0",
+    version="1.3.0",
     description=(
         "Governed agentic AI for extreme-weather "
         "grid outage risk assessment."
@@ -21,10 +29,107 @@ app = FastAPI(
 )
 
 
+# ==================================================
+# Historical validation artifacts
+# ==================================================
+
+DATA_FILE = Path(
+    "data/processed/harris_model_dataset_2024.csv"
+)
+
+MODEL_METADATA_FILE = Path(
+    "src/models/artifacts/model_metadata.joblib"
+)
+
+MODEL_RESULTS_FILE = Path(
+    "src/models/artifacts/model_comparison.csv"
+)
+
+
+validation_df = pd.read_csv(
+    DATA_FILE,
+    parse_dates=["date"],
+)
+
+validation_df = (
+    validation_df
+    .sort_values("date")
+    .reset_index(drop=True)
+)
+
+
+model_metadata = joblib.load(
+    MODEL_METADATA_FILE
+)
+
+major_outage_threshold = float(
+    model_metadata["threshold"]
+)
+
+split_date = pd.Timestamp(
+    model_metadata["split_date"]
+)
+
+
+model_results = pd.read_csv(
+    MODEL_RESULTS_FILE
+)
+
+best_results = (
+    model_results[
+        model_results["model"]
+        == "logistic_regression"
+    ]
+    .iloc[0]
+)
+
+
+# Number of true major-outage days
+# in the held-out Jul-Dec test period.
+test_validation_df = validation_df[
+    validation_df["date"] >= split_date
+].copy()
+
+test_validation_df[
+    "actual_major_outage"
+] = (
+    test_validation_df[
+        "daily_peak_outage"
+    ]
+    >= major_outage_threshold
+).astype(int)
+
+total_test_major_outages = int(
+    test_validation_df[
+        "actual_major_outage"
+    ].sum()
+)
+
+# Recall = TP / all actual positives.
+# Derive the number detected from the
+# stored evaluation metric.
+detected_test_major_outages = int(
+    round(
+        float(
+            best_results["recall"]
+        )
+        * total_test_major_outages
+    )
+)
+
+
+# ==================================================
+# Request model
+# ==================================================
+
 class AssessmentRequest(BaseModel):
     query: str
     target_date: str
 
+
+# ==================================================
+# Helpers
+# ==================================================
 
 def extract_risk_summary(
     final_answer: str,
@@ -86,6 +191,92 @@ def parse_evidence(
     return parsed
 
 
+def get_historical_validation(
+    target_date: str,
+    risk_probability: float,
+):
+
+    target = pd.Timestamp(
+        target_date
+    )
+
+    row = validation_df[
+        validation_df["date"] == target
+    ]
+
+    if row.empty:
+
+        return None
+
+    row = row.iloc[0]
+
+    actual_peak = float(
+        row["daily_peak_outage"]
+    )
+
+    actual_major_outage = bool(
+        actual_peak
+        >= major_outage_threshold
+    )
+
+    predicted_major_outage = bool(
+        risk_probability
+        >= 0.50
+    )
+
+    is_test_period = bool(
+        target >= split_date
+    )
+
+    return {
+        "period":
+            (
+                "Held-out test"
+                if is_test_period
+                else "Training period"
+            ),
+
+        "is_out_of_sample":
+            is_test_period,
+
+        "predicted_label":
+            (
+                "HIGH RISK"
+                if predicted_major_outage
+                else "LOW RISK"
+            ),
+
+        "actual_label":
+            (
+                "MAJOR OUTAGE"
+                if actual_major_outage
+                else "NO MAJOR OUTAGE"
+            ),
+
+        "correct":
+            (
+                predicted_major_outage
+                == actual_major_outage
+            ),
+
+        "actual_peak_customers_out":
+            int(
+                round(
+                    actual_peak
+                )
+            ),
+
+        "major_outage_threshold":
+            float(
+                major_outage_threshold
+            ),
+    }
+
+
+# ==================================================
+# API
+# ==================================================
+
 @app.get("/health")
 def health():
 
@@ -116,6 +307,15 @@ def assess(
 
         reasoning = explain_prediction(
             request.target_date
+        )
+
+        historical_validation = (
+            get_historical_validation(
+                request.target_date,
+                result[
+                    "risk_probability"
+                ],
+            )
         )
 
         latency_seconds = (
@@ -216,6 +416,62 @@ def assess(
             "reasoning":
                 reasoning,
 
+            "historical_validation":
+                historical_validation,
+
+            "test_performance": {
+                "period":
+                    "July-December 2024",
+
+                "roc_auc":
+                    float(
+                        best_results[
+                            "roc_auc"
+                        ]
+                    ),
+
+                "pr_auc":
+                    float(
+                        best_results[
+                            "pr_auc"
+                        ]
+                    ),
+
+                "precision":
+                    float(
+                        best_results[
+                            "precision"
+                        ]
+                    ),
+
+                "recall":
+                    float(
+                        best_results[
+                            "recall"
+                        ]
+                    ),
+
+                "f1":
+                    float(
+                        best_results[
+                            "f1"
+                        ]
+                    ),
+
+                "brier_score":
+                    float(
+                        best_results[
+                            "brier_score"
+                        ]
+                    ),
+
+                "detected_major_outages":
+                    detected_test_major_outages,
+
+                "total_major_outages":
+                    total_test_major_outages,
+            },
+
             "llm_provider":
                 result.get(
                     "llm_provider",
@@ -245,6 +501,10 @@ def assess(
             detail=str(exc),
         )
 
+
+# ==================================================
+# UI
+# ==================================================
 
 @app.get(
     "/",
@@ -427,6 +687,69 @@ button:disabled {
     font-size: 14px;
 }
 
+.validation-highlight {
+    background: #f7faf8;
+    border: 1px solid #d8e7de;
+}
+
+.validation-grid {
+    display: grid;
+    grid-template-columns:
+        repeat(3, 1fr);
+    gap: 9px;
+    margin-bottom: 13px;
+}
+
+.validation-item {
+    background: white;
+    border: 1px solid #e2e8e4;
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.validation-label {
+    color: #7a8490;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.validation-value {
+    margin-top: 5px;
+    font-size: 15px;
+    font-weight: 780;
+}
+
+.validation-correct {
+    color: #26715f;
+}
+
+.validation-missed {
+    color: #9a3e24;
+}
+
+.test-performance {
+    margin-top: 13px;
+    padding: 13px 14px;
+    background: white;
+    border: 1px solid #e2e8e4;
+    border-radius: 10px;
+    color: #485568;
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.test-performance strong {
+    color: #263349;
+}
+
+.validation-note {
+    margin-top: 11px;
+    color: #596577;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
 .evidence-grid {
     display: grid;
     grid-template-columns:
@@ -577,7 +900,8 @@ button:disabled {
 
     .metrics,
     .evidence-grid,
-    .small-grid {
+    .small-grid,
+    .validation-grid {
         grid-template-columns:
             1fr 1fr;
     }
@@ -716,6 +1040,26 @@ button:disabled {
                 <div
                     id="summary"
                     class="summary"
+                ></div>
+
+            </div>
+
+
+            <div
+                class="section validation-highlight"
+            >
+
+                <div class="section-title">
+                    Historical Validation
+                </div>
+
+                <div
+                    id="historical-validation"
+                ></div>
+
+                <div
+                    id="test-performance"
+                    class="test-performance"
                 ></div>
 
             </div>
@@ -1141,6 +1485,152 @@ function renderDriver(
 }
 
 
+function renderHistoricalValidation(
+    validation
+) {
+
+    const container =
+        document.getElementById(
+            "historical-validation"
+        );
+
+    if (!validation) {
+
+        container.innerHTML =
+            "<div class='validation-note'>"
+            + "Historical validation is not available "
+            + "for this date."
+            + "</div>";
+
+        return;
+    }
+
+    const statusText =
+        validation.correct
+        ? "CORRECT ✓"
+        : "MISSED";
+
+    const statusClass =
+        validation.correct
+        ? "validation-correct"
+        : "validation-missed";
+
+    const periodMessage =
+        validation.is_out_of_sample
+        ? (
+            "This date belongs to the held-out "
+            + "July-December 2024 test period and "
+            + "was not used during model training."
+        )
+        : (
+            "This date belongs to the training "
+            + "period, so this comparison should "
+            + "not be interpreted as an "
+            + "out-of-sample validation result."
+        );
+
+    container.innerHTML =
+        "<div class='validation-grid'>"
+
+        + "<div class='validation-item'>"
+        + "<div class='validation-label'>"
+        + "Predicted"
+        + "</div>"
+        + "<div class='validation-value'>"
+        + validation.predicted_label
+        + "</div>"
+        + "</div>"
+
+        + "<div class='validation-item'>"
+        + "<div class='validation-label'>"
+        + "Actual Outcome"
+        + "</div>"
+        + "<div class='validation-value'>"
+        + validation.actual_label
+        + "</div>"
+        + "</div>"
+
+        + "<div class='validation-item'>"
+        + "<div class='validation-label'>"
+        + "Validation"
+        + "</div>"
+        + "<div class='validation-value "
+        + statusClass
+        + "'>"
+        + statusText
+        + "</div>"
+        + "</div>"
+
+        + "</div>"
+
+        + "<div class='validation-note'>"
+        + "<strong>Observed peak outage:</strong> "
+        + validation
+            .actual_peak_customers_out
+            .toLocaleString()
+        + " customers.<br>"
+        + "<strong>"
+        + validation.period
+        + ":</strong> "
+        + periodMessage
+        + "</div>";
+}
+
+
+function renderTestPerformance(
+    perf
+) {
+
+    const container =
+        document.getElementById(
+            "test-performance"
+        );
+
+    container.innerHTML =
+        "<strong>"
+        + "Held-Out Test Performance "
+        + "(Jul-Dec 2024)"
+        + "</strong><br>"
+
+        + "ROC-AUC: "
+        + perf.roc_auc.toFixed(3)
+
+        + " · PR-AUC: "
+        + perf.pr_auc.toFixed(3)
+
+        + " · Precision: "
+        + (
+            perf.precision
+            * 100
+        ).toFixed(1)
+        + "%"
+
+        + " · Recall: "
+        + (
+            perf.recall
+            * 100
+        ).toFixed(1)
+        + "%"
+
+        + " · F1: "
+        + perf.f1.toFixed(2)
+
+        + "<br>"
+
+        + "<strong>Major-outage days detected: "
+        + perf.detected_major_outages
+        + " of "
+        + perf.total_major_outages
+        + "</strong>"
+
+        + "<br>"
+
+        + "These metrics were measured on the "
+        + "held-out July-December 2024 period, "
+        + "which was not used to train the model.";
+}
+
+
 async function assessRisk() {
 
     const button =
@@ -1256,6 +1746,16 @@ async function assessRisk() {
             "summary"
         ).textContent =
             data.risk_summary;
+
+
+        renderHistoricalValidation(
+            data.historical_validation
+        );
+
+
+        renderTestPerformance(
+            data.test_performance
+        );
 
 
         const evidence =
